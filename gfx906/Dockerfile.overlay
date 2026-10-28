@@ -1,0 +1,16 @@
+# vim: filetype=dockerfile
+#
+# Official Ollama image with its ROCm runner replaced by a gfx906 build.
+# Build context: a directory holding rocm_v7_2/ (output of the dist stage).
+
+ARG OLLAMA_VERSION
+
+FROM ollama/ollama:${OLLAMA_VERSION}
+ARG REVISION
+ARG ROCM_BASE_NAME
+ARG ROCM_BASE_DIGEST
+LABEL org.opencontainers.image.revision=${REVISION} \
+      org.opencontainers.image.base.name=${ROCM_BASE_NAME} \
+      org.opencontainers.image.base.digest=${ROCM_BASE_DIGEST}
+RUN rm -rf /usr/lib/ollama/rocm_v7_2
+COPY rocm_v7_2 /usr/lib/ollama/rocm_v7_2

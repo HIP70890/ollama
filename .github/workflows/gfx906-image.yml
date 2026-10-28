@@ -1,0 +1,103 @@
+# Builds the official Ollama image with a ROCm runner for gfx906 and pushes it
+# to ghcr.io/<owner>/ollama-gfx906. See gfx906/README.md.
+#
+# Runs only on this repository's own events (manual dispatch, pushes to
+# gfx906/build); never on pull requests, which could come from anyone.
+name: gfx906-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      ollama_version:
+        description: Ollama release tag the branch is based on (empty = gfx906/versions.env)
+        required: false
+        default: ""
+      variant:
+        description: rocm7.14 = ML-gfx906 ROCm, rocm7.2.1-upstream = official ROCm of the Ollama Dockerfile
+        type: choice
+        options: [rocm7.14, rocm7.2.1-upstream]
+        default: rocm7.14
+      push:
+        description: Push the image to ghcr
+        type: boolean
+        default: false
+  push:
+    branches: [gfx906/build]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: gfx906-image-${{ github.ref }}-${{ inputs.variant || 'rocm7.14' }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      VARIANT: ${{ inputs.variant || 'rocm7.14' }}
+      PUSH: ${{ github.event_name == 'push' || inputs.push }}
+    steps:
+      # The ROCm images need far more than the ~14 GB a runner has free
+      - uses: jlumbroso/free-disk-space@36e9a5af4eddb91fc11aec4c6f6f79b3cc0cb523 # main 2026-09-17
+        with:
+          tool-cache: true
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read versions
+        env:
+          INPUT_VERSION: ${{ inputs.ollama_version }}
+        run: |
+          . gfx906/versions.env
+          version=${INPUT_VERSION:-$OLLAMA_VERSION}
+          echo "OLLAMA_VERSION=$version" >> "$GITHUB_ENV"
+          echo "ROCM_IMAGE=$ROCM_IMAGE" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ollama-gfx906:${version#v}-$VARIANT-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      # The runner replaces the one in ollama/ollama:<version>, so it must be
+      # built from exactly that release's sources.
+      - name: Check that the branch is based on the release
+        run: |
+          git merge-base --is-ancestor "$OLLAMA_VERSION" HEAD
+          test "$(cat LLAMA_CPP_VERSION)" = "$(git show "$OLLAMA_VERSION:LLAMA_CPP_VERSION")"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the gfx906 runner (ML-gfx906 ROCm)
+        if: env.VARIANT == 'rocm7.14'
+        run: |
+          docker buildx build -f gfx906/Dockerfile.gfx906 \
+            --build-arg ROCM_IMAGE="$ROCM_IMAGE" \
+            --target dist --output type=local,dest=out .
+          echo "ROCM_BASE=$ROCM_IMAGE" >> "$GITHUB_ENV"
+
+      - name: Build the image
+        run: |
+          docker buildx build -f gfx906/Dockerfile.overlay \
+            --build-arg OLLAMA_VERSION="${OLLAMA_VERSION#v}" \
+            --build-arg REVISION="$GITHUB_SHA" \
+            --build-arg ROCM_BASE_NAME="${ROCM_BASE%@*}" \
+            --build-arg ROCM_BASE_DIGEST="${ROCM_BASE#*@}" \
+            --load -t "$IMAGE" out
+
+      - name: Check the image
+        run: gfx906/check-image.sh "$IMAGE" "$OLLAMA_VERSION"
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: env.PUSH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the image
+        if: env.PUSH == 'true'
+        run: |
+          docker push "$IMAGE"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          echo "Pushed \`$digest\`" >> "$GITHUB_STEP_SUMMARY"

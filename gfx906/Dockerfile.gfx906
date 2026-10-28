@@ -1,0 +1,35 @@
+# vim: filetype=dockerfile
+#
+# ROCm runner for gfx906 (Radeon VII, Instinct MI50/MI60), built against the
+# gfx906 ROCm of https://github.com/mixa3607/ML-gfx906 with the same CMake
+# preset as the official ROCm runner. The "dist" stage holds only the runner
+# directory; gfx906/Dockerfile.overlay puts it into the official image.
+
+ARG ROCM_IMAGE
+
+FROM ${ROCM_IMAGE} AS build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential cmake ninja-build ccache \
+    && rm -rf /var/lib/apt/lists/*
+ENV CC=/opt/rocm/llvm/bin/clang CXX=/opt/rocm/llvm/bin/clang++
+ENV CMAKE_GENERATOR=Ninja
+ENV LDFLAGS=-s
+WORKDIR /src
+COPY LLAMA_CPP_VERSION .
+COPY llama/server llama/server
+COPY llama/compat llama/compat
+COPY cmake cmake
+RUN --mount=type=cache,target=/root/.ccache \
+    cmake -S llama/server --preset rocm_v7_2_user_arch \
+        -DAMDGPU_TARGETS=gfx906 \
+        -DCMAKE_HIP_FLAGS="-parallel-jobs=4 -mllvm -amdgpu-sched-strategy=max-ilp" \
+        && cmake --build build/llama-server-rocm_v7_2 -- -l $(nproc) \
+        && cmake --install build/llama-server-rocm_v7_2 --component llama-server --strip
+# The offload bundler is only available here: make sure the runner really
+# contains gfx906 code objects (also when the bundles are compressed).
+RUN objcopy --dump-section .hip_fatbin=/tmp/fatbin dist/lib/ollama/rocm_v7_2/libggml-hip.so \
+    && /opt/rocm/llvm/bin/clang-offload-bundler --list --type=o --input=/tmp/fatbin | tee /tmp/targets \
+    && grep -q 'gfx906' /tmp/targets
+
+FROM scratch AS dist
+COPY --from=build /src/dist/lib/ollama/rocm_v7_2 /rocm_v7_2
