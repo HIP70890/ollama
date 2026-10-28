@@ -25,6 +25,14 @@ RUN --mount=type=cache,target=/root/.ccache \
         -DCMAKE_HIP_FLAGS="-parallel-jobs=4 -mllvm -amdgpu-sched-strategy=max-ilp" \
         && cmake --build build/llama-server-rocm_v7_2 -- -l $(nproc) \
         && cmake --install build/llama-server-rocm_v7_2 --component llama-server --strip
+# Ollama's install bundles ROCm libraries by name; TheRock builds link further
+# ones (e.g. libclang-cpp). Bundle every library the runner resolves from
+# /opt/rocm (ldd lists the whole dependency tree) and print the list.
+RUN cd dist/lib/ollama/rocm_v7_2 \
+    && for lib in *.so*; do LD_LIBRARY_PATH=. ldd "$lib"; done \
+        | awk '$3 ~ "^/opt/rocm" {print $3}' | sort -u > /tmp/extra-libs \
+    && cat /tmp/extra-libs \
+    && xargs -r -a /tmp/extra-libs cp -L -t .
 # TheRock keeps rocBLAS kernels in one directory per GPU target
 # (rocblas/library/gfx906/), while Ollama's GPU discovery looks for
 # rocblas/library/TensileLibrary_lazy_<target>.dat. Link it there; rocBLAS

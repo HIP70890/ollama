@@ -37,7 +37,7 @@ ROCm builds from TheRock (ML-gfx906 7.14) differ from the official layout in
 two ways, both handled here:
 
 - **Kernel location:** rocBLAS kernels sit in one directory per target, `rocblas/library/gfx906/`. `Dockerfile.gfx906` links the index to where Ollama's discovery looks.
-- **Extra libraries:** the HIP runtime needs `librocm_kpack` and `librocm_sysdeps_*`, which are bundled via `feat/rocm-build-options`.
+- **Extra libraries:** the HIP runtime needs `librocm_kpack` and `librocm_sysdeps_*`, which are bundled via `feat/rocm-build-options`. It also needs further libraries such as `libclang-cpp`. `Dockerfile.gfx906` bundles every library the runner resolves from `/opt/rocm` and prints the list in the build log.
 
 The image labels `org.opencontainers.image.revision` and
 `org.opencontainers.image.base.*` record the commit and the ROCm image.
