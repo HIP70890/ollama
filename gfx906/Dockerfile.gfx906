@@ -29,10 +29,11 @@ RUN --mount=type=cache,target=/root/.ccache \
 # ones (e.g. libclang-cpp, found via an $ORIGIN-relative RUNPATH that does not
 # exist in the runner directory). Copy every library still unresolved from
 # /opt/rocm until none is left, printing each, and fail if one is not found.
+# libggml-* come from the official image (/usr/lib/ollama), not from ROCm.
 RUN cd dist/lib/ollama/rocm_v7_2 \
     && for i in 1 2 3 4 5; do \
         missing=$(for lib in *.so*; do LD_LIBRARY_PATH=. ldd "$lib"; done \
-            | awk '/not found/ {print $1}' | sort -u); \
+            | awk '/not found/ && $1 !~ /^libggml-/ {print $1}' | sort -u); \
         [ -z "$missing" ] && break; \
         for m in $missing; do \
             f=$(find -L /opt/rocm/ -name "$m" -print -quit); \
@@ -40,7 +41,7 @@ RUN cd dist/lib/ollama/rocm_v7_2 \
             echo "bundling $f"; cp -L "$f" .; \
         done; \
     done \
-    && [ -z "$(for lib in *.so*; do LD_LIBRARY_PATH=. ldd "$lib"; done | grep 'not found')" ]
+    && [ -z "$(for lib in *.so*; do LD_LIBRARY_PATH=. ldd "$lib"; done | grep 'not found' | grep -v 'libggml-')" ]
 # TheRock keeps rocBLAS kernels in one directory per GPU target
 # (rocblas/library/gfx906/), while Ollama's GPU discovery looks for
 # rocblas/library/TensileLibrary_lazy_<target>.dat. Link it there; rocBLAS
