@@ -25,14 +25,22 @@ RUN --mount=type=cache,target=/root/.ccache \
         -DCMAKE_HIP_FLAGS="-parallel-jobs=4 -mllvm -amdgpu-sched-strategy=max-ilp" \
         && cmake --build build/llama-server-rocm_v7_2 -- -l $(nproc) \
         && cmake --install build/llama-server-rocm_v7_2 --component llama-server --strip
-# Ollama's install bundles ROCm libraries by name; TheRock builds link further
-# ones (e.g. libclang-cpp). Bundle every library the runner resolves from
-# /opt/rocm (ldd lists the whole dependency tree) and print the list.
+# Ollama's install bundles ROCm libraries by name; TheRock builds need further
+# ones (e.g. libclang-cpp, found via an $ORIGIN-relative RUNPATH that does not
+# exist in the runner directory). Copy every library still unresolved from
+# /opt/rocm until none is left, printing each, and fail if one is not found.
 RUN cd dist/lib/ollama/rocm_v7_2 \
-    && for lib in *.so*; do LD_LIBRARY_PATH=. ldd "$lib"; done \
-        | awk '$3 ~ "^/opt/rocm" {print $3}' | sort -u > /tmp/extra-libs \
-    && cat /tmp/extra-libs \
-    && xargs -r -a /tmp/extra-libs cp -L -t .
+    && for i in 1 2 3 4 5; do \
+        missing=$(for lib in *.so*; do LD_LIBRARY_PATH=. ldd "$lib"; done \
+            | awk '/not found/ {print $1}' | sort -u); \
+        [ -z "$missing" ] && break; \
+        for m in $missing; do \
+            f=$(find -L /opt/rocm/ -name "$m" -print -quit); \
+            [ -n "$f" ] || { echo "not in /opt/rocm: $m"; exit 1; }; \
+            echo "bundling $f"; cp -L "$f" .; \
+        done; \
+    done \
+    && [ -z "$(for lib in *.so*; do LD_LIBRARY_PATH=. ldd "$lib"; done | grep 'not found')" ]
 # TheRock keeps rocBLAS kernels in one directory per GPU target
 # (rocblas/library/gfx906/), while Ollama's GPU discovery looks for
 # rocblas/library/TensileLibrary_lazy_<target>.dat. Link it there; rocBLAS
