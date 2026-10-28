@@ -129,16 +129,30 @@ FROM scratch AS publish-llama-server-cuda_v13
 COPY --from=llama-server-cuda_v13 dist/lib/ollama /lib/ollama/
 
 FROM rocm-7-deps AS llama-server-rocm_v7_2
+# Optional semicolon-separated GPU targets (e.g. gfx906) built instead of the
+# rocm_v7_2_linux preset list. rocBLAS kernels for gfx900/gfx906 are kept only
+# for targets that are built, so GPU discovery never accepts a device without
+# matching runner kernels.
+ARG ROCM_AMDGPU_TARGETS=
 ENV CC=clang CXX=clang++ CXXFLAGS=--gcc-toolchain=/opt/rh/gcc-toolset-13/root/usr
 COPY LLAMA_CPP_VERSION .
 COPY llama/server llama/server
 COPY llama/compat llama/compat
 COPY cmake cmake
 RUN --mount=type=cache,target=/root/.ccache \
-    cmake -S llama/server --preset rocm_v7_2_linux \
+    if [ -n "$ROCM_AMDGPU_TARGETS" ]; then \
+        cmake -S llama/server --preset rocm_v7_2_user_arch -DAMDGPU_TARGETS="$ROCM_AMDGPU_TARGETS"; \
+    else \
+        cmake -S llama/server --preset rocm_v7_2_linux; \
+    fi \
         && cmake --build build/llama-server-rocm_v7_2 -- -l $(nproc) \
         && cmake --install build/llama-server-rocm_v7_2 --component llama-server --strip
-RUN rm -f dist/lib/ollama/rocm_v7_2/rocblas/library/*gfx90[06]*
+RUN for t in gfx900 gfx906; do \
+        case ";$ROCM_AMDGPU_TARGETS;" in \
+            *";$t;"*|*";$t:"*) ;; \
+            *) rm -f dist/lib/ollama/rocm_v7_2/rocblas/library/*$t* ;; \
+        esac; \
+    done
 
 FROM scratch AS publish-llama-server-rocm_v7_2
 COPY --from=llama-server-rocm_v7_2 dist/lib/ollama /lib/ollama/
