@@ -76,13 +76,27 @@ jobs:
             --target dist --output type=local,dest=out .
           echo "ROCM_BASE=$ROCM_IMAGE" >> "$GITHUB_ENV"
 
+      # Same runner stage as the official image, only with ROCM_AMDGPU_TARGETS:
+      # shows whether the build argument alone is enough for gfx906.
+      - name: Build the gfx906 runner (official ROCm of the Ollama Dockerfile)
+        if: env.VARIANT == 'rocm7.2.1-upstream'
+        run: |
+          docker buildx build -f Dockerfile \
+            --build-arg ROCM_AMDGPU_TARGETS=gfx906 \
+            --target publish-llama-server-rocm_v7_2 --output type=local,dest=out-raw .
+          mkdir -p out
+          mv out-raw/lib/ollama/rocm_v7_2 out/rocm_v7_2
+          echo "ROCM_BASE=rocm/dev-almalinux-8:$(sed -n 's/^ARG ROCMVERSION=//p' Dockerfile)-complete" >> "$GITHUB_ENV"
+
       - name: Build the image
         run: |
+          digest=""
+          case "$ROCM_BASE" in *@*) digest=${ROCM_BASE#*@} ;; esac
           docker buildx build -f gfx906/Dockerfile.overlay \
             --build-arg OLLAMA_VERSION="${OLLAMA_VERSION#v}" \
             --build-arg REVISION="$GITHUB_SHA" \
             --build-arg ROCM_BASE_NAME="${ROCM_BASE%@*}" \
-            --build-arg ROCM_BASE_DIGEST="${ROCM_BASE#*@}" \
+            --build-arg ROCM_BASE_DIGEST="$digest" \
             --load -t "$IMAGE" out
 
       - name: Check the image
